@@ -1,0 +1,1604 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="theme-color" content="#0a0a1e" />
+  <title>StarMerge</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      position: fixed;
+      top: 0;
+      left: 0;
+      touch-action: none;
+      overscroll-behavior: none;
+      background: #0a0a1e;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    #game-wrap {
+      width: 100%;
+      height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+    }
+
+    #game-canvas {
+      display: block;
+      background: transparent;
+      box-shadow: 0 0 60px rgba(80, 120, 255, 0.15);
+      border-radius: 4px;
+    }
+
+    /* 昵称输入覆盖层（DOM） */
+    #nickname-overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(5, 5, 20, 0.85);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 10;
+      flex-direction: column;
+    }
+    #nickname-overlay.active {
+      display: flex;
+    }
+    #nickname-title {
+      color: #ff4d6d;
+      font-size: 22px;
+      font-weight: bold;
+      margin-bottom: 18px;
+      text-align: center;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    #nickname-score {
+      color: #ffffff;
+      font-size: 16px;
+      margin-bottom: 18px;
+      text-align: center;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    #nickname-input {
+      width: 220px;
+      max-width: 70%;
+      padding: 10px 14px;
+      font-size: 15px;
+      border: 2px solid #5a6fd6;
+      border-radius: 8px;
+      background: rgba(20, 20, 56, 0.9);
+      color: #ffffff;
+      outline: none;
+      text-align: center;
+      margin-bottom: 14px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    #nickname-input::placeholder {
+      color: rgba(180, 180, 220, 0.6);
+    }
+    #nickname-confirm {
+      width: 220px;
+      max-width: 70%;
+      padding: 11px 0;
+      font-size: 16px;
+      font-weight: bold;
+      color: #ffffff;
+      background: #ff4d6d;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      -webkit-tap-highlight-color: transparent;
+    }
+    #nickname-confirm:active {
+      background: #e03a5a;
+    }
+
+    /* 常驻排行榜按钮（DOM，悬浮于 Canvas 之上） */
+    #lb-btn {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      z-index: 5;
+      padding: 6px 12px;
+      font-size: 13px;
+      font-weight: bold;
+      color: #ffffff;
+      background: rgba(20, 20, 56, 0.55);
+      border: 1px solid rgba(120, 140, 200, 0.35);
+      border-radius: 20px;
+      cursor: pointer;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      -webkit-tap-highlight-color: transparent;
+      user-select: none;
+      pointer-events: auto;
+    }
+    #lb-btn:active {
+      background: rgba(40, 40, 80, 0.8);
+    }
+  </style>
+</head>
+<body>
+  <div id="game-wrap">
+    <canvas id="game-canvas" width="400" height="600"></canvas>
+    <div id="nickname-overlay">
+      <div id="nickname-title">游戏结束</div>
+      <div id="nickname-score">本次得分：0</div>
+      <input id="nickname-input" type="text" maxlength="8" placeholder="请输入昵称（最多8字）" />
+      <button id="nickname-confirm">确定</button>
+    </div>
+    <button id="lb-btn">🏆 排行榜</button>
+  </div>
+
+  <script>
+    (function () {
+      const canvas = document.getElementById('game-canvas');
+      const ctx = canvas.getContext('2d');
+
+      const LOGICAL_W = 400;
+      const LOGICAL_H = 600;
+
+      // ========== 等级配置 ==========
+      // 1级黄14px -> 10级彩虹50px，尺寸线性插值
+      function getLevelSize(level) {
+        const lv = Math.max(1, Math.min(10, level | 0));
+        return 14 + (lv - 1) * 4; // 14,18,22,26,30,34,38,42,46,50
+      }
+
+      // 高区分度配色：相邻等级在色相/亮度上大幅跳跃
+      const LEVEL_COLORS = {
+        1: '#FFD700', // 亮黄
+        2: '#FF6B35', // 橘红
+        3: '#FF2D55', // 玫瑰红
+        4: '#AF52DE', // 紫罗兰
+        5: '#007AFF', // 宝蓝
+        6: '#00C7BE', // 湖蓝（青）
+        7: '#34C759', // 翠绿
+        8: '#FF69B4', // 粉红
+        // 9 级为金色径向渐变，10 级为彩虹渐变，见下方函数
+      };
+
+      // 9级金色渐变：中心亮白 → 边缘金色
+      function getGoldGradient(cx, cy, r) {
+        const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+        g.addColorStop(0.00, '#ffffff');
+        g.addColorStop(0.30, '#fff4b8');
+        g.addColorStop(0.70, '#FFD700');
+        g.addColorStop(1.00, '#b8860b');
+        return g;
+      }
+
+      // 10级彩虹渐变：沿星芒长度（中心→外）循环红橙黄绿蓝靛紫
+      function getRainbowGradient(cx, cy, r) {
+        const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+        g.addColorStop(0.00, '#ffffff');
+        g.addColorStop(0.10, '#ff5252');
+        g.addColorStop(0.25, '#ff9800');
+        g.addColorStop(0.40, '#FFD700');
+        g.addColorStop(0.55, '#34C759');
+        g.addColorStop(0.70, '#00C7BE');
+        g.addColorStop(0.85, '#007AFF');
+        g.addColorStop(1.00, '#AF52DE');
+        return g;
+      }
+
+      function getLevelFill(level, x, y, r) {
+        if (level >= 10) return getRainbowGradient(x, y, r);
+        if (level === 9) return getGoldGradient(x, y, r);
+        return LEVEL_COLORS[level] || LEVEL_COLORS[1];
+      }
+
+      // ========== 十字星芒 + 玻璃外壳 ==========
+      // 构建菱形十字星芒路径（两条菱形交叉），不填充
+      // size = star.radius * star.scale（碰撞半径 × 动画缩放），星芒臂长严格限制在外壳圆内
+      function drawCrossPath(ctx, cx, cy, size, angle) {
+        const armLen = size * 0.85;   // 臂长（中心到尖端），限制在外壳内
+        const armWide = size * 0.30;   // 臂宽（菱形最宽处一半）
+        const a = angle || 0;
+        const cos = Math.cos(a);
+        const sin = Math.sin(a);
+        function pt(lx, ly) {
+          return [cx + lx * cos - ly * sin, cy + lx * sin + ly * cos];
+        }
+        ctx.beginPath();
+        // 水平菱形：左尖 -> 上 -> 右尖 -> 下
+        let p = pt(-armLen, 0);     ctx.moveTo(p[0], p[1]);
+        p = pt(0, -armWide);        ctx.lineTo(p[0], p[1]);
+        p = pt(armLen, 0);          ctx.lineTo(p[0], p[1]);
+        p = pt(0, armWide);         ctx.lineTo(p[0], p[1]);
+        ctx.closePath();
+        // 垂直菱形：上尖 -> 右 -> 下尖 -> 左
+        p = pt(0, -armLen);        ctx.moveTo(p[0], p[1]);
+        p = pt(armWide, 0);         ctx.lineTo(p[0], p[1]);
+        p = pt(0, armLen);          ctx.lineTo(p[0], p[1]);
+        p = pt(-armWide, 0);        ctx.lineTo(p[0], p[1]);
+        ctx.closePath();
+      }
+
+      // 绘制十字星芒：多层径向渐变实现中心亮、边缘羽化
+      // 等级越高，发光范围略增大；9级金色核心、10级彩虹核心+外层彩虹光晕
+      function drawStarBurst(cx, cy, size, angle, level) {
+        ctx.save();
+        // 等级越高发光略增大（level 1 ≈ 0.865, level 10 ≈ 1.0），仍限制在外壳圆内
+        const glowFactor = 0.85 + level * 0.015;
+        const glowR = size * glowFactor;
+
+        // 外层柔光：跟随等级主色调
+        drawCrossPath(ctx, cx, cy, size, angle);
+        const glow = ctx.createRadialGradient(cx, cy, 0, cx, cy, glowR);
+        glow.addColorStop(0, getLevelRGBA(level, 0.55));
+        glow.addColorStop(0.5, getLevelRGBA(level, 0.22));
+        glow.addColorStop(1, getLevelRGBA(level, 0));
+        ctx.fillStyle = glow;
+        ctx.fill();
+
+        // 等级10：额外外层彩虹光晕（圆形柔光，限制在外壳内）
+        if (level >= 10) {
+          const halo = ctx.createRadialGradient(cx, cy, size * 0.3, cx, cy, size * 0.95);
+          halo.addColorStop(0, 'rgba(255,255,255,0)');
+          halo.addColorStop(0.4, 'rgba(255,180,200,0.12)');
+          halo.addColorStop(0.7, 'rgba(180,200,255,0.15)');
+          halo.addColorStop(1, 'rgba(200,150,255,0)');
+          ctx.beginPath();
+          ctx.arc(cx, cy, size * 0.95, 0, Math.PI * 2);
+          ctx.fillStyle = halo;
+          ctx.fill();
+        }
+
+        // 内层主体：较实，中心亮白
+        drawCrossPath(ctx, cx, cy, size * 0.85, angle);
+        const coreR = size * 0.85;
+
+        if (level >= 10) {
+          // 彩虹核心：沿星芒长度循环
+          ctx.fillStyle = getRainbowGradient(cx, cy, coreR);
+          ctx.fill();
+          // 中心白光叠加
+          const white = ctx.createRadialGradient(cx, cy, 0, cx, cy, coreR * 0.4);
+          white.addColorStop(0, 'rgba(255,255,255,0.9)');
+          white.addColorStop(1, 'rgba(255,255,255,0)');
+          ctx.fillStyle = white;
+          ctx.fill();
+        } else if (level === 9) {
+          // 金色核心：中心白 → 边缘金
+          const core = ctx.createRadialGradient(cx, cy, 0, cx, cy, coreR);
+          core.addColorStop(0, 'rgba(255,255,255,0.98)');
+          core.addColorStop(0.3, 'rgba(255,244,184,0.9)');
+          core.addColorStop(0.7, 'rgba(255,215,0,0.6)');
+          core.addColorStop(1, 'rgba(184,134,11,0)');
+          ctx.fillStyle = core;
+          ctx.fill();
+        } else {
+          // 默认：中心偏白，外缘用等级色
+          const core = ctx.createRadialGradient(cx, cy, 0, cx, cy, coreR);
+          core.addColorStop(0, 'rgba(255,255,255,0.95)');
+          core.addColorStop(0.35, getLevelRGBA(level, 0.85));
+          core.addColorStop(0.75, getLevelRGBA(level, 0.5));
+          core.addColorStop(1, getLevelRGBA(level, 0));
+          ctx.fillStyle = core;
+          ctx.fill();
+        }
+        ctx.restore();
+      }
+
+      // 玻璃球外壳：半透明填充 + 内阴影 + 高光点
+      function drawGlassShell(cx, cy, r) {
+        ctx.save();
+        // 玻璃主体：径向渐变模拟球体（左上亮、右下暗）
+        const shell = ctx.createRadialGradient(cx - r * 0.35, cy - r * 0.35, r * 0.1, cx, cy, r);
+        shell.addColorStop(0, 'rgba(255,255,255,0.22)');
+        shell.addColorStop(0.5, 'rgba(200,220,255,0.10)');
+        shell.addColorStop(0.85, 'rgba(150,180,220,0.06)');
+        shell.addColorStop(1, 'rgba(100,130,180,0.18)');
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, 0, Math.PI * 2);
+        ctx.fillStyle = shell;
+        ctx.fill();
+
+        // 内阴影：环形描边模拟玻璃厚度
+        ctx.beginPath();
+        ctx.arc(cx, cy, r - 1, 0, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+
+        // 内阴影下半部（暗边）
+        ctx.beginPath();
+        ctx.arc(cx, cy, r - 0.5, Math.PI * 0.15, Math.PI * 0.85);
+        ctx.strokeStyle = 'rgba(60,80,120,0.35)';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+
+        // 高光点：左上角小椭圆
+        ctx.beginPath();
+        ctx.ellipse(cx - r * 0.38, cy - r * 0.38, r * 0.22, r * 0.14, -Math.PI / 4, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(255,255,255,0.45)';
+        ctx.fill();
+
+        // 次级小高光
+        ctx.beginPath();
+        ctx.arc(cx - r * 0.5, cy - r * 0.25, r * 0.07, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(255,255,255,0.7)';
+        ctx.fill();
+        ctx.restore();
+      }
+
+      // 等级色 → rgba 字符串（用于渐变 stop）
+      function hexToRGB(hex) {
+        const h = hex.replace('#', '');
+        return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
+      }
+      function getLevelRGBA(level, alpha) {
+        if (level >= 10) {
+          // 彩虹平均色（粉紫）用于光晕
+          return 'rgba(255,150,200,' + alpha + ')';
+        }
+        if (level === 9) {
+          // 金色平均（#FFD700）
+          return 'rgba(255,215,0,' + alpha + ')';
+        }
+        const rgb = hexToRGB(LEVEL_COLORS[level] || LEVEL_COLORS[1]);
+        return 'rgba(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ',' + alpha + ')';
+      }
+
+      // ========== 星空背景 ==========
+      // 繁星点缀：预生成位置/大小/闪烁参数
+      const bgStars = [];
+      (function initBgStars() {
+        const count = 80;
+        for (let i = 0; i < count; i++) {
+          bgStars.push({
+            x: Math.random() * LOGICAL_W,
+            y: Math.random() * LOGICAL_H,
+            r: 0.5 + Math.random() * 1.5,
+            baseAlpha: 0.3 + Math.random() * 0.5,
+            twinkleSpeed: 0.5 + Math.random() * 2.0,
+            phase: Math.random() * Math.PI * 2,
+          });
+        }
+      })();
+
+      let frameCount = 0;
+      function drawBackground() {
+        const gradient = ctx.createLinearGradient(0, 0, 0, LOGICAL_H);
+        gradient.addColorStop(0, '#0a0a1e');
+        gradient.addColorStop(0.5, '#141438');
+        gradient.addColorStop(1, '#1f1f52');
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, 0, LOGICAL_W, LOGICAL_H);
+
+        // 繁星闪烁
+        const t = frameCount * 0.016;
+        for (let i = 0; i < bgStars.length; i++) {
+          const s = bgStars[i];
+          const alpha = s.baseAlpha * (0.5 + 0.5 * Math.sin(t * s.twinkleSpeed + s.phase));
+          ctx.globalAlpha = alpha;
+          ctx.fillStyle = '#ffffff';
+          ctx.beginPath();
+          ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.globalAlpha = 1;
+        frameCount++;
+      }
+
+      // ========== 玻璃瓶底地面（弧形抛物线） ==========
+      // groundY(x) = BASE - CURVE * (x - W/2)^2
+      //   中心 x=W/2 处最低（y 最大，屏幕下方），两侧翘起 → 球自然向中心滚动
+      const GROUND_BASE_Y = LOGICAL_H * 0.8;   // 480：瓶底基准（屏幕下方 1/5）
+      const CURVE = 0.0008;                     // 弧度系数：边缘比中心高 32px
+      const WARNING_LINE_Y = LOGICAL_H * 0.4;   // 警戒线 y = 240（屏幕从下往上 3/5 处）
+
+      // 球心 x 处的地面 y 坐标（球应满足 y + radius <= groundY）
+      function groundYAt(x) {
+        const dx = x - LOGICAL_W / 2;
+        return GROUND_BASE_Y - CURVE * dx * dx;
+      }
+
+      // 球心 x 处的地面法线（单位向量，指向球的上方，即 -y 方向）
+      //   dy/dx = -2*CURVE*(x - W/2)
+      //   法线 = (dy/dx, -1) 归一化（在屏幕坐标 y 向下中，-y 为上）
+      //   左侧 x<W/2：法线 x 分量为正（指向中心）→ 球被推向中心
+      function groundNormalAt(x) {
+        const dydx = -2 * CURVE * (x - LOGICAL_W / 2);
+        let nx = dydx;
+        let ny = -1;
+        const len = Math.sqrt(nx * nx + ny * ny);
+        return [nx / len, ny / len];
+      }
+
+      function drawGlassFloor() {
+        ctx.save();
+        const SEG = 40;
+        // 主体填充：沿抛物线
+        ctx.beginPath();
+        ctx.moveTo(0, LOGICAL_H);
+        ctx.lineTo(0, groundYAt(0));
+        for (let i = 1; i <= SEG; i++) {
+          const x = (i / SEG) * LOGICAL_W;
+          ctx.lineTo(x, groundYAt(x));
+        }
+        ctx.lineTo(LOGICAL_W, LOGICAL_H);
+        ctx.closePath();
+
+        const g = ctx.createLinearGradient(0, GROUND_BASE_Y - 40, 0, LOGICAL_H);
+        g.addColorStop(0.00, 'rgba(120,180,220,0.12)');
+        g.addColorStop(0.25, 'rgba(40, 90,140,0.42)');
+        g.addColorStop(0.60, 'rgba(15, 35, 70,0.62)');
+        g.addColorStop(1.00, 'rgba(8, 18, 40,0.85)');
+        ctx.fillStyle = g;
+        ctx.fill();
+
+        // 顶部高光线（沿抛物线）
+        ctx.beginPath();
+        ctx.moveTo(0, groundYAt(0));
+        for (let i = 1; i <= SEG; i++) {
+          const x = (i / SEG) * LOGICAL_W;
+          ctx.lineTo(x, groundYAt(x));
+        }
+        ctx.strokeStyle = 'rgba(200,240,255,0.65)';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+
+        // 次级细高光
+        ctx.beginPath();
+        ctx.moveTo(0, groundYAt(0) + 1.5);
+        for (let i = 1; i <= SEG; i++) {
+          const x = (i / SEG) * LOGICAL_W;
+          ctx.lineTo(x, groundYAt(x) + 1.5);
+        }
+        ctx.strokeStyle = 'rgba(220,255,255,0.25)';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+
+        ctx.restore();
+      }
+
+      // ========== 游戏状态 ==========
+      const HIGH_SCORE_KEY = 'starMergeHighScore';
+      const LEADERBOARD_KEY = 'starMergeLeaderboard';  // 排行榜 localStorage 键名
+      function loadHighScore() {
+        try {
+          const v = localStorage.getItem(HIGH_SCORE_KEY);
+          return v ? parseInt(v, 10) || 0 : 0;
+        } catch (e) { return 0; }
+      }
+      function saveHighScore(v) {
+        try { localStorage.setItem(HIGH_SCORE_KEY, String(v)); } catch (e) {}
+      }
+      // 排行榜：localStorage 中存数组 [{name, score, date}]，按分数降序保留前 10 名
+      function getLeaderboard() {
+        try {
+          const v = localStorage.getItem(LEADERBOARD_KEY);
+          if (!v) return [];
+          const arr = JSON.parse(v);
+          return Array.isArray(arr) ? arr : [];
+        } catch (e) { return []; }
+      }
+      function saveLeaderboard(name, score) {
+        const list = getLeaderboard();
+        list.push({ name: name || '匿名', score: score, date: Date.now() });
+        // 按分数从高到低排序
+        list.sort((a, b) => b.score - a.score);
+        // 只保留前 10 名
+        if (list.length > 10) list.length = 10;
+        try { localStorage.setItem(LEADERBOARD_KEY, JSON.stringify(list)); } catch (e) {}
+        return list;
+      }
+      const state = {
+        balls: [],          // 统一：所有活跃球（等待、下落、落地、合成产物）全在里面
+        effects: [],        // 特效（消失/弹出光环），纯动画非实体
+        isDragging: false,
+        dragOffsetX: 0,
+        score: 0,           // 合成得分
+        highScore: loadHighScore(),  // 历史最高分（localStorage 持久化）
+        leaderboard: getLeaderboard(),  // 本地排行榜（启动时从 localStorage 读取）
+        gameOver: false,    // 游戏结束标记
+        rafId: null,        // requestAnimationFrame id（用于结束时取消循环）
+        showLeaderboard: false,  // 是否显示排行榜查看遮罩层
+        scoreSubmitted: false,   // 本次分数是否已提交到排行榜（避免重复提交）
+        pausedFromGame: false,   // 游戏中打开排行榜时暂停标记（关闭后恢复循环）
+      };
+      // DOM 引用：昵称输入层（仅在游戏结束提交分数时显示）
+      const nicknameOverlay = document.getElementById('nickname-overlay');
+      const nicknameInput = document.getElementById('nickname-input');
+      const nicknameConfirm = document.getElementById('nickname-confirm');
+      const nicknameScoreEl = document.getElementById('nickname-score');
+      // DOM 引用：常驻排行榜按钮
+      const lbBtn = document.getElementById('lb-btn');
+
+      // 创建一颗玻璃球：质量 mass ∝ radius³（等级1 radius=14 → mass=1）
+      function makeBall(x, y, level) {
+        const radius = getLevelSize(level);
+        const mass = Math.pow(radius / 14, 3);
+        return {
+          x: x,
+          y: y,
+          prevX: x,           // 上一帧位置：位移驱动滚动用
+          prevY: y,
+          vx: 0,
+          vy: 0,
+          angle: 0,           // 旋转角度：位移驱动滚动更新，不再有 angularVelocity
+          radius: radius,
+          level: level | 0,
+          mass: mass,
+          isPending: false,   // 等待释放球：顶部悬浮、不受重力、不参与碰撞
+          isStatic: false,    // 为全物理预留：暂时全为 false（动态）
+          controllable: false,// 玩家可控（释放后 true）
+          fixed: false,       // 保留：落地/堆积后的静止标记（vx=vy=0 语义化）
+          sleeping: false,    // 休眠：低速时进入，被推挤时唤醒
+          scale: 1,           // 弹出动画缩放
+          hasLanded: false,   // 是否经历过明显下落或触地（失败判定用，避免顶部静止误判）
+          stableFrames: 0,    // 失败判定：连续静止+越界的帧数计数（需>=30才判失败）
+        };
+      }
+
+      function randomLevel() { return 1 + Math.floor(Math.random() * 3); }
+
+      // 从 balls 里找 isPending=true 的那颗（唯一）
+      function getPendingBall() {
+        for (let i = 0; i < state.balls.length; i++) {
+          if (state.balls[i].isPending) return state.balls[i];
+        }
+        return null;
+      }
+
+      // 找 balls 里 controllable=true 的那颗（玩家正在操作的下落球）
+      function getControllableBall() {
+        for (let i = 0; i < state.balls.length; i++) {
+          if (state.balls[i].controllable && !state.balls[i].isPending) return state.balls[i];
+        }
+        return null;
+      }
+
+      function spawnPendingStar() {
+        const ball = makeBall(LOGICAL_W / 2, 60, randomLevel());
+        ball.isPending = true;
+        ball.controllable = false;
+        state.balls.push(ball);
+      }
+      spawnPendingStar();
+
+      // 释放等待球：isPending=false → 成为 controllable 玩家球，立即生成新 pending
+      function releasePendingStar(targetX) {
+        const ps = getPendingBall();
+        if (!ps) return;
+        const clampedX = Math.max(ps.radius, Math.min(LOGICAL_W - ps.radius, targetX));
+        ps.x = clampedX;
+        ps.y = 60;
+        ps.vy = 0;
+        ps.isPending = false;
+        ps.controllable = true;
+        // 立即生成下一颗等待球
+        spawnPendingStar();
+      }
+
+      // 从 balls 数组中移除某个球（合成消耗）
+      function removeBallFromArray(ball) {
+        const idx = state.balls.indexOf(ball);
+        if (idx >= 0) state.balls.splice(idx, 1);
+      }
+
+      // ========== 物理 ==========
+      const GRAVITY = 0.55;   // 重力加速度（像素/帧²）
+
+      function circleCollide(a, b) {
+        const dx = a.x - b.x;
+        const dy = a.y - b.y;
+        const rSum = a.radius + b.radius;
+        return dx * dx + dy * dy <= rSum * rSum;
+      }
+
+      function clampHorizontal(star) {
+        const minX = star.radius;
+        const maxX = LOGICAL_W - star.radius;
+        if (star.x < minX) { star.x = minX; star.vx = 0; }
+        if (star.x > maxX) { star.x = maxX; star.vx = 0; }
+      }
+
+      function resolveCollision(moving, fixed) {
+        const dx = moving.x - fixed.x;
+        const dy = moving.y - fixed.y;
+        let dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist === 0) { dist = 0.01; dy = -1; }
+        const overlap = (moving.radius + fixed.radius) - dist;
+        moving.x += (dx / dist) * overlap;
+        moving.y += (dy / dist) * overlap;
+        clampHorizontal(moving);
+      }
+
+      // 固定一颗球（落地/堆积后）：只清速度、打 fixed 标记，不再 push 进 fixedStars
+      function fixStar(star, isPlayer) {
+        star.fixed = true;
+        star.vx = 0;
+        star.vy = 0;
+        if (isPlayer) {
+          // 玩家球结束控制
+          star.controllable = false;
+        }
+        // 球仍留在 state.balls 数组中
+      }
+
+      // 单球物理更新：重力 + 位置积分 + 边界碰撞（恢复系数 0.2）+ 阻尼
+      // 旋转：位移驱动滚动（基于 prevX/prevY 计算移动距离和切向分量），球与星芒作为整体滚动
+      // 不含球-球碰撞（统一在 resolveBallCollisions 中处理）
+      function updateMoving(star, isPlayer) {
+        if (star.isPending) return; // 等待球完全跳过
+
+        // 弹出缩放回弹（所有非pending球都做）
+        if (star.scale < 1) {
+          star.scale += (1 - star.scale) * 0.18;
+          if (star.scale > 0.99) star.scale = 1;
+        }
+
+        // 休眠球：静止，不更新位置/速度/角度（仍参与碰撞推挤，被推挤时唤醒）
+        if (star.sleeping && !star.controllable) {
+          // 更新 prevX/prevY 为当前位置，避免唤醒后用旧位置算大位移
+          star.prevX = star.x;
+          star.prevY = star.y;
+          return;
+        }
+
+        // 拖拽中的玩家球：保持悬停，不应用物理（位置由 onPointerMove 控制）
+        if (isPlayer && state.isDragging) {
+          star.sleeping = false;
+          // 角度更新和 prevX/prevY 统一放在 updatePhysics 最后（全物理完成后）
+          return;
+        }
+
+        // 1. 重力加速
+        star.vy += GRAVITY;
+
+        // 2. 位置更新
+        star.x += star.vx;
+        star.y += star.vy;
+
+        // 3. 边界碰撞：左墙（恢复系数 0.2，微弱反弹 + 额外阻尼防抖动）
+        if (star.x < star.radius) {
+          star.x = star.radius;
+          if (star.vx < 0) {
+            star.vx = -star.vx * 0.2;  // 法向反弹 e=0.2
+            star.vx *= 0.9;            // 额外阻尼，避免边界高速抖动
+            star.vy *= 0.9;            // 同步衰减切向分量
+            if (Math.abs(star.vx) < 0.3) star.vx = 0;  // 微小反弹归零
+          }
+        }
+        // 右墙
+        if (star.x > LOGICAL_W - star.radius) {
+          star.x = LOGICAL_W - star.radius;
+          if (star.vx > 0) {
+            star.vx = -star.vx * 0.2;
+            star.vx *= 0.9;
+            star.vy *= 0.9;
+            if (Math.abs(star.vx) < 0.3) star.vx = 0;
+          }
+        }
+        // 弧形瓶底：沿法线方向推开 + 恢复系数 0.2
+        const gy = groundYAt(star.x);
+        if (star.y + star.radius > gy) {
+          const n = groundNormalAt(star.x);  // [nx, ny] 指向上方
+          const penetration = (star.y + star.radius) - gy;
+          star.x += n[0] * penetration;
+          star.y += n[1] * penetration;
+          // 速度沿法线分解，反弹法向分量
+          const vn = star.vx * n[0] + star.vy * n[1];  // 法向速度（指向地下为正）
+          if (vn < 0) {  // 正在撞向地面
+            const e = 0.2;
+            star.vx -= (1 + e) * vn * n[0];
+            star.vy -= (1 + e) * vn * n[1];
+            star.vx *= 0.85;   // 切向摩擦衰减
+            star.vx *= 0.9;    // 额外阻尼
+            star.vy *= 0.9;
+            if (Math.abs(star.vy) < 0.3) star.vy = 0;
+            if (Math.abs(star.vx) < 0.2) star.vx = 0;
+            if (isPlayer) star.controllable = false;
+            // 触地 → 标记已落地（用于失败判定，避免顶部静止球误判）
+            star.hasLanded = true;
+          }
+        }
+
+        // 4. 线性阻尼（空气阻力 + 摩擦）：0.95 减少阻力保持速度，重力 0.55 加快下落
+        star.vx *= 0.95;
+        star.vy *= 0.95;
+
+        // 5. 速度钳制：最大 6 px/帧
+        const MAX_V = 6;
+        const vMax = Math.max(Math.abs(star.vx), Math.abs(star.vy));
+        if (vMax > MAX_V) { const s = MAX_V / vMax; star.vx *= s; star.vy *= s; }
+
+        // 6. 休眠判定：速度平方和 < 0.1 且位移极小 → 归零 & 标记休眠
+        //    注：位移驱动滚动，无 angularVelocity；位移极小时角速度也极小
+        const dx = star.x - star.prevX;
+        const dy = star.y - star.prevY;
+        const distSq = dx * dx + dy * dy;
+        const speedSq = star.vx * star.vx + star.vy * star.vy;
+        // 曾经达到明显速度（speedSq >= 1.0）→ 标记已落地，允许后续失败判定
+        if (speedSq >= 1.0) star.hasLanded = true;
+        if (speedSq < 0.1 && distSq < 0.0005) {
+          star.vx = 0;
+          star.vy = 0;
+          star.sleeping = true;
+        } else {
+          star.sleeping = false;
+        }
+        // 7. 角度更新和 prevX/prevY 统一放在 updatePhysics 最后（全物理完成后）
+      }
+
+      // 位移驱动滚动：球整体滚动（星芒+玻璃外壳同步旋转）
+      //   displacement = (x-prevX, y-prevY)
+      //   distance = ||displacement||  < 0.01 → 不更新角度（停止时不动）
+      //   tangentDx = dx·cos(angle) + dy·sin(angle)  // 切向位移
+      //   angle -= tangentDx / radius  // 切向位移 / 半径 = 滚动角度
+      function updateAngleByDisplacement(star) {
+        const dx = star.x - star.prevX;
+        const dy = star.y - star.prevY;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        if (distance > 0.01) {
+          // 将位移转换为滚动角度
+          const tangentDx = dx * Math.cos(star.angle) + dy * Math.sin(star.angle);
+          star.angle -= tangentDx / star.radius;
+        }
+        star.prevX = star.x;
+        star.prevY = star.y;
+      }
+
+      // 合并两个球 a, b：在中点创建高一级新球，速度/角度按质量加权平均，标记 a/b dead
+      //   新球获得向上弹起速度 + 切向随机扰动，跳开并旋转
+      //   即时连锁合成：新球立即可参与后续碰撞与合成
+      function mergeTwoBalls(a, b) {
+        const mx = (a.x + b.x) / 2;
+        const my = (a.y + b.y) / 2;
+        const newLevel = a.level + 1;
+        const ns = makeBall(mx, my, newLevel);
+        ns.isPending = false;
+        // 动量守恒：速度按质量加权平均
+        const tm = a.mass + b.mass;
+        ns.vx = (a.mass * a.vx + b.mass * b.vx) / tm;
+        ns.vy = (a.mass * a.vy + b.mass * b.vy) / tm;
+        // 角度按质量加权平均（保持视觉旋转连续性）
+        ns.angle = (a.mass * a.angle + b.mass * b.angle) / tm;
+        ns.prevX = mx;
+        ns.prevY = my;
+        ns.scale = 0.3;  // 弹出动画
+        ns.hasLanded = a.hasLanded || b.hasLanded;  // 继承父球落地标记，避免顶部合成球永远无法触发警戒线
+        // 向上弹起 + 沿两旧球中心连线切向的随机扰动（±1）
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        const len = Math.sqrt(dx * dx + dy * dy) || 1;
+        const tx = -dy / len;   // 切向（垂直于中心连线）
+        const ty = dx / len;
+        const randSign = (Math.random() < 0.5 ? -1 : 1);
+        const randMag = Math.random() * 1.0 * randSign;  // ±1 范围
+        ns.vx += tx * randMag;
+        ns.vy = -3;  // 强制向上弹起
+        // 标记旧球待移除
+        a.dead = true;
+        b.dead = true;
+        // 加入新球（参与后续碰撞与连锁合成）
+        state.balls.push(ns);
+        // 特效：两旧球消失 + 新球弹出光环
+        state.effects.push(makeVanish(a.x, a.y, a.radius, a.level));
+        state.effects.push(makeVanish(b.x, b.y, b.radius, b.level));
+        state.effects.push(makePop(mx, my, ns.radius, newLevel));
+        // 得分：新等级 N * 10
+        state.score += newLevel * 10;
+        return ns;
+      }
+
+      // 扫描所有球对，合并同等级重叠对（即时连锁合成）
+      //   新合成球立即可参与后续合成，支持同帧连锁
+      function doMergePass() {
+        let anyMerged = false;
+        let safety = 50;
+        while (safety-- > 0) {
+          let found = false;
+          for (let i = 0; i < state.balls.length; i++) {
+            const a = state.balls[i];
+            if (a.isPending || a.dead) continue;
+            for (let j = i + 1; j < state.balls.length; j++) {
+              const b = state.balls[j];
+              if (b.isPending || b.dead) continue;
+              // 合成条件：同等级 且 都 < 10 且 非 pending
+              if (a.level !== b.level || a.level >= 10) continue;
+              // 重叠检测
+              const dx = b.x - a.x;
+              const dy = b.y - a.y;
+              const rSum = a.radius + b.radius;
+              if (dx * dx + dy * dy >= rSum * rSum) continue;
+              // 合并！
+              mergeTwoBalls(a, b);
+              found = true;
+              anyMerged = true;
+              break;  // 重启扫描（新球可能立即连锁合成）
+            }
+            if (found) break;
+          }
+          if (!found) break;
+        }
+        return anyMerged;
+      }
+
+      // 球-球碰撞响应（迭代 N=5 次）：
+      //   前 N-1 次：合成判定 + 位置推挤 + 唤醒休眠 + 静摩擦打破 + 斜面滑落（仅位置，不加冲量）
+      //   最后 1 次：+ 法向冲量(e=0.20) + 切向库仑摩擦(mu=0.15) + 强制最小分离速度(0.3) + 速度钳制(6)
+      //   5 次迭代彻底消除重叠（< 0.5px），最后才施冲量避免过度加速
+      function resolveBallCollisions() {
+        const WALL_E = 0.2;       // 边界反弹恢复系数（微弱）
+        const COLLISION_ITERS = 10;  // 迭代次数：前 9 次仅位置修正，最后 1 次位置+冲量
+        for (let iter = 0; iter < COLLISION_ITERS; iter++) {
+          const isLast = (iter === COLLISION_ITERS - 1);
+          // 0. 合成检测（优先于推挤）：同等级重叠 → 合并（支持连锁）
+          doMergePass();
+
+          // 1. 位置推挤（跳过 dead 球）
+          for (let i = 0; i < state.balls.length; i++) {
+            const a = state.balls[i];
+            if (a.isPending || a.dead) continue;
+            for (let jj = i + 1; jj < state.balls.length; jj++) {
+              const b = state.balls[jj];
+              if (b.isPending || b.dead) continue;
+              const dx = b.x - a.x;
+              const dy = b.y - a.y;
+              const rSum = a.radius + b.radius;
+              const distSq = dx * dx + dy * dy;
+              if (distSq >= rSum * rSum) continue;
+              if (distSq < 0.0001) continue;
+
+              const dist = Math.sqrt(distSq);
+              const overlap = rSum - dist;
+              const nx = dx / dist;
+              const ny = dy / dist;
+
+              // 1. 纯位置推挤：沿法线按质量比例分离（重的少动）
+              const totalMass = a.mass + b.mass;
+              const aMove = overlap * (b.mass / totalMass);
+              const bMove = overlap * (a.mass / totalMass);
+              a.x -= nx * aMove;
+              a.y -= ny * aMove;
+              b.x += nx * bMove;
+              b.y += ny * bMove;
+
+              // 2. 唤醒/锁定休眠球
+              //    双方都休眠：推开 + 速度归零，保持休眠（防止推挤本身引入微小速度）
+              //    仅一方休眠：被推挤即唤醒（阈值 0.001，避免被推离支撑面后悬空）
+              if (a.sleeping && b.sleeping) {
+                a.vx = 0; a.vy = 0;
+                b.vx = 0; b.vy = 0;
+                // 保持 sleeping = true，不唤醒
+              } else {
+                if (aMove > 0.001) a.sleeping = false;
+                if (bMove > 0.001) b.sleeping = false;
+              }
+
+              // 2.5 静摩擦打破：位置修正后若两球速度都极小，赋予微小分离速度打破静力平衡
+              //    （模拟轻微扰动，避免完全静止的球在挤压后永远分不开）
+              const aSpeedSq = a.vx * a.vx + a.vy * a.vy;
+              const bSpeedSq = b.vx * b.vx + b.vy * b.vy;
+              if (aSpeedSq < 0.1 && bSpeedSq < 0.1) {
+                const SEP_V = 0.3;  // 总分离速度大小
+                // 沿法线方向，a 朝 -n，b 朝 +n，按质量反比分配大小
+                if (!a.sleeping) {
+                  a.vx -= nx * SEP_V * (b.mass / totalMass);
+                  a.vy -= ny * SEP_V * (b.mass / totalMass);
+                }
+                if (!b.sleeping) {
+                  b.vx += nx * SEP_V * (a.mass / totalMass);
+                  b.vy += ny * SEP_V * (a.mass / totalMass);
+                }
+              }
+
+              // 3. 法向冲量 + 切向摩擦冲量 + 强制最小分离速度（仅最后一次迭代施加，避免过度加速）
+              //    - 前 N-1 次迭代仅做位置推挤，彻底消除重叠后，再在最后一次施加冲量
+              //    - 法向：恢复系数 e=0.20，产生轻微分离速度
+              //    - 切向：库仑摩擦 mu=0.15，限制 |j_t| <= mu * |j_n|
+              //    - 强制最小分离速度 >= 0.5，确保不粘连
+              if (isLast) {
+                const rvx = b.vx - a.vx;  // 相对速度（b 相对 a）
+                const rvy = b.vy - a.vy;
+                const rv_n = rvx * nx + rvy * ny;  // 法向相对速度（b 远离 a 为正）
+                if (rv_n < 0) {
+                  const e = 0.20;                  // 恢复系数
+                  const invMassSum = 1 / a.mass + 1 / b.mass;  // 1/m1 + 1/m2
+                  // 法向冲量大小
+                  const j_n = -(1 + e) * rv_n / invMassSum;
+                  if (!a.sleeping) {
+                    a.vx -= (j_n / a.mass) * nx;
+                    a.vy -= (j_n / a.mass) * ny;
+                  }
+                  if (!b.sleeping) {
+                    b.vx += (j_n / b.mass) * nx;
+                    b.vy += (j_n / b.mass) * ny;
+                  }
+                  // 切向摩擦冲量（产生横向滑动）
+                  const tx = -ny;
+                  const ty = nx;
+                  const rv_t = rvx * tx + rvy * ty;
+                  if (Math.abs(rv_t) >= 0.1) {  // 避免静止时抖动
+                    const j_t = -rv_t / invMassSum;
+                    const mu = 0.15;  // 库仑摩擦系数
+                    const maxJt = mu * Math.abs(j_n);
+                    const clampedJt = Math.max(-maxJt, Math.min(maxJt, j_t));
+                    if (!a.sleeping) {
+                      a.vx -= (clampedJt / a.mass) * tx;
+                      a.vy -= (clampedJt / a.mass) * ty;
+                    }
+                    if (!b.sleeping) {
+                      b.vx += (clampedJt / b.mass) * tx;
+                      b.vy += (clampedJt / b.mass) * ty;
+                    }
+                  }
+                }
+                // 强制最小分离速度：冲量计算后，若法向分离速度仍 < 0.3，则补足到 0.3
+                const new_rvx = b.vx - a.vx;
+                const new_rvy = b.vy - a.vy;
+                const new_rv_n = new_rvx * nx + new_rvy * ny;
+                if (new_rv_n < 0.3) {
+                  const delta = 0.3 - new_rv_n;
+                  if (!a.sleeping) {
+                    a.vx -= nx * delta * (b.mass / totalMass);
+                    a.vy -= ny * delta * (b.mass / totalMass);
+                  }
+                  if (!b.sleeping) {
+                    b.vx += nx * delta * (a.mass / totalMass);
+                    b.vy += ny * delta * (a.mass / totalMass);
+                  }
+                }
+                // 速度钳制：任一分量绝对值 > 6 时按比例缩放回 6（防止飞出）
+                const MAX_V = 6;
+                const aMax = Math.max(Math.abs(a.vx), Math.abs(a.vy));
+                if (aMax > MAX_V) { const s = MAX_V / aMax; a.vx *= s; a.vy *= s; }
+                const bMax = Math.max(Math.abs(b.vx), Math.abs(b.vy));
+                if (bMax > MAX_V) { const s = MAX_V / bMax; b.vx *= s; b.vy *= s; }
+              }
+
+              // 4. 球在斜面（非正上方支撑）上自然滑落：仅在明显侧偏时加微小切向加速度
+              //    - |nx| > 0.05：避免正上方支撑时也加加速度，允许球休眠
+              //    - 速度上限检查：避免无限加速积累，保证球能进入休眠阈值（speedSq < 0.01）
+              //    - 系数从 0.12 降到 0.02：平衡速度从 ~4 降到 ~0.67，衰减后可达休眠阈值
+              if (!a.sleeping && b.y >= a.y && ny > 0.15 && Math.abs(nx) > 0.05) {
+                if (a.vx * a.vx + a.vy * a.vy < 0.25) a.vx += nx * 0.02;
+              }
+              if (!b.sleeping && a.y >= b.y && -ny > 0.15 && Math.abs(nx) > 0.05) {
+                if (b.vx * b.vx + b.vy * b.vy < 0.25) b.vx += nx * 0.02;
+              }
+
+              // 5. 玩家球碰其它球失去控制
+              if (a.controllable) a.controllable = false;
+              if (b.controllable) b.controllable = false;
+            }
+          }
+          // 每次迭代后 clamp 边界（位置修正可能把球推出边界）
+          // 弧形瓶底：使用 groundYAt(x) 计算地面高度，沿法线推开
+          for (let i = 0; i < state.balls.length; i++) {
+            const bb = state.balls[i];
+            if (bb.isPending || bb.dead) continue;
+            if (bb.x < bb.radius) {
+              bb.x = bb.radius;
+              if (bb.vx < 0) {
+                bb.vx = -bb.vx * WALL_E;
+                bb.vx *= 0.9;
+                bb.vy *= 0.9;
+                if (Math.abs(bb.vx) < 0.3) bb.vx = 0;
+              }
+            }
+            if (bb.x > LOGICAL_W - bb.radius) {
+              bb.x = LOGICAL_W - bb.radius;
+              if (bb.vx > 0) {
+                bb.vx = -bb.vx * WALL_E;
+                bb.vx *= 0.9;
+                bb.vy *= 0.9;
+                if (Math.abs(bb.vx) < 0.3) bb.vx = 0;
+              }
+            }
+            // 弧形瓶底碰撞
+            const gy = groundYAt(bb.x);
+            if (bb.y + bb.radius > gy) {
+              const n = groundNormalAt(bb.x);
+              const pen = (bb.y + bb.radius) - gy;
+              bb.x += n[0] * pen;
+              bb.y += n[1] * pen;
+              const vn = bb.vx * n[0] + bb.vy * n[1];
+              if (vn < 0) {
+                const e = 0.2;
+                bb.vx -= (1 + e) * vn * n[0];
+                bb.vy -= (1 + e) * vn * n[1];
+                bb.vx *= 0.85;
+                bb.vx *= 0.9;
+                bb.vy *= 0.9;
+                if (Math.abs(bb.vy) < 0.3) bb.vy = 0;
+                if (Math.abs(bb.vx) < 0.2) bb.vx = 0;
+              }
+            }
+          }
+        }
+        // 过滤 dead 球（已合成移除）
+        for (let i = state.balls.length - 1; i >= 0; i--) {
+          if (state.balls[i].dead) state.balls.splice(i, 1);
+        }
+        // 位移驱动角度更新和 prevX/prevY 统一放在 updatePhysics 最后
+      }
+
+      // 最终锁定机制：对所有休眠球，若与其他球圆心距 < r1+r2-0.5，纯几何微调位置，保持速度为零（不唤醒）
+      //   作为碰撞迭代后的兜底，彻底消除残留重叠导致的微小滑动
+      function lockSleepingBalls() {
+        for (let i = 0; i < state.balls.length; i++) {
+          const a = state.balls[i];
+          if (a.isPending || a.dead || !a.sleeping) continue;
+          for (let j = 0; j < state.balls.length; j++) {
+            if (i === j) continue;
+            const b = state.balls[j];
+            if (b.isPending || b.dead) continue;
+            const dx = b.x - a.x;
+            const dy = b.y - a.y;
+            const rSum = a.radius + b.radius;
+            const minDist = rSum - 0.5;  // 允许 0.5px 间隙
+            const distSq = dx * dx + dy * dy;
+            if (distSq >= minDist * minDist) continue;
+            if (distSq < 0.0001) continue;  // 完全重合跳过
+            const dist = Math.sqrt(distSq);
+            const overlap = minDist - dist;
+            const nx = dx / dist;
+            const ny = dy / dist;
+            // 仅移动休眠球（a），保持速度为零；若 b 也休眠则按质量反比分配
+            if (b.sleeping) {
+              const totalMass = a.mass + b.mass;
+              a.x -= nx * overlap * (b.mass / totalMass);
+              a.y -= ny * overlap * (b.mass / totalMass);
+              b.x += nx * overlap * (a.mass / totalMass);
+              b.y += ny * overlap * (a.mass / totalMass);
+              b.vx = 0; b.vy = 0;
+            } else {
+              a.x -= nx * overlap;
+              a.y -= ny * overlap;
+            }
+            a.vx = 0; a.vy = 0;
+          }
+        }
+      }
+
+      function updatePhysics() {
+        if (state.gameOver) return;
+        // 1. 所有球物理更新（重力 + 边界 + 阻尼）
+        const playerBall = getControllableBall();
+        for (let i = 0; i < state.balls.length; i++) {
+          const b = state.balls[i];
+          if (b.isPending) continue;
+          const isPlayer = (b === playerBall);
+          updateMoving(b, isPlayer);
+        }
+        // 2. 球-球碰撞解决（合成 + 位置修正）
+        resolveBallCollisions();
+        // 2.5 最终锁定：对所有休眠球，若与其他球圆心距 < r1+r2-0.5，纯几何微调位置，保持速度为零
+        lockSleepingBalls();
+        // 2.6 统一位移驱动旋转：全物理（重力、边界、推挤、锁定）完成后，
+        //     对每个非待机球做一次 angle 计算，并保存 prevX/prevY 作为下一帧基准
+        //     解决此前角度更新分散在多处、prevX/prevY 被覆写导致星芒不转的 bug
+        for (let i = 0; i < state.balls.length; i++) {
+          const b = state.balls[i];
+          if (b.isPending) continue;
+          updateAngleByDisplacement(b);
+        }
+        // 3. 游戏结束判定：hasLanded=true 的球，连续 30 帧静止+顶部超过警戒线才判失败
+        //    警戒线 Y = canvasHeight * 0.4 = 240（屏幕从上往下 40% 处）
+        //    stableFrames 机制：给球足够时间滚落/弹开，避免瞬间误判（如合成球在警戒线上方）
+        let shouldEnd = false;
+        for (let i = 0; i < state.balls.length; i++) {
+          const b = state.balls[i];
+          if (b.isPending || b.dead) continue;
+          // 未落地，但已休眠且非等待球 → 视为已落地（堆积静止态必有支撑）
+          if (!b.hasLanded) {
+            if (!b.sleeping || b.isPending || b.controllable) {
+              b.stableFrames = 0; continue;
+            }
+          }
+          const speedSq = b.vx * b.vx + b.vy * b.vy;
+          const topY = b.y - b.radius;
+          const overLine = topY < WARNING_LINE_Y;
+          const still = speedSq < 0.1;
+          if (still && overLine) {
+            b.stableFrames += 1;  // 静止且越界 → 累计
+            if (b.stableFrames >= 30) {  // 连续 30 帧（约 0.5 秒）
+              shouldEnd = true;
+              break;
+            }
+          } else {
+            b.stableFrames = 0;  // 运动或已回到线下 → 清零
+          }
+        }
+        if (shouldEnd) {
+          state.gameOver = true;
+          state.scoreSubmitted = false;
+          state.showLeaderboard = false;
+          // 保存最高分到 localStorage
+          if (state.score > state.highScore) {
+            state.highScore = state.score;
+            saveHighScore(state.highScore);
+          }
+          // 停止游戏循环
+          if (state.rafId !== null) {
+            cancelAnimationFrame(state.rafId);
+            state.rafId = null;
+          }
+          // 显示昵称输入覆盖层（DOM），等待用户输入后再保存排行榜
+          nicknameScoreEl.textContent = '本次得分：' + state.score;
+          nicknameInput.value = '';
+          nicknameOverlay.classList.add('active');
+          // 渲染画面（显示 gameOver 遮罩，稍后 DOM 层会叠加在 Canvas 之上）
+          render();
+          return;
+        }
+        // 4. 特效更新
+        updateEffects();
+      }
+
+      // ========== 特效 ==========
+      function makeVanish(x, y, radius, level) {
+        return { type: 'vanish', x: x, y: y, radius: radius, level: level, t: 0, duration: 260 };
+      }
+      function makePop(x, y, radius, level) {
+        return { type: 'pop', x: x, y: y, radius: radius, level: level, t: 0, duration: 380 };
+      }
+
+      function updateEffects() {
+        for (let i = state.effects.length - 1; i >= 0; i--) {
+          state.effects[i].t += 16;
+          if (state.effects[i].t >= state.effects[i].duration) state.effects.splice(i, 1);
+        }
+      }
+
+      function drawEffects() {
+        for (let i = 0; i < state.effects.length; i++) {
+          const e = state.effects[i];
+          const p = e.t / e.duration;
+          if (e.type === 'vanish') {
+            const r = e.radius * (1 - p);
+            const a = 1 - p;
+            if (r > 0.5) {
+              ctx.globalAlpha = a;
+              drawStarBurst(e.x, e.y, r, 0, e.level);
+              ctx.globalAlpha = 1;
+            }
+          } else if (e.type === 'pop') {
+            const ringR = e.radius * (1 + p * 1.1);
+            const a = (1 - p) * 0.7;
+            ctx.globalAlpha = a;
+            ctx.beginPath();
+            ctx.arc(e.x, e.y, ringR, 0, Math.PI * 2);
+            ctx.lineWidth = 3;
+            ctx.strokeStyle = getLevelFill(e.level, e.x, e.y, ringR);
+            ctx.stroke();
+            ctx.globalAlpha = 1;
+          }
+        }
+      }
+
+      // ========== 输入：点击释放 + 拖拽 ==========
+      function getCanvasPos(evt) {
+        const rect = canvas.getBoundingClientRect();
+        const clientX = evt.touches ? evt.touches[0].clientX : evt.clientX;
+        const clientY = evt.touches ? evt.touches[0].clientY : evt.clientY;
+        const scaleX = LOGICAL_W / rect.width;
+        const scaleY = LOGICAL_H / rect.height;
+        return {
+          x: (clientX - rect.left) * scaleX,
+          y: (clientY - rect.top) * scaleY,
+        };
+      }
+
+      function onPointerDown(evt) {
+        if (state.gameOver || state.showLeaderboard) return;
+        evt.preventDefault();
+        const s = getControllableBall();
+        const pending = getPendingBall();
+        // 场景1：没有活动可控球且有等待球 → 释放
+        if (!s && pending) {
+          const p = getCanvasPos(evt);
+          releasePendingStar(p.x);
+          // 释放后立即开始拖拽（新释放的球已 controllable=true）
+          const newCtrl = getControllableBall();
+          if (newCtrl) {
+            state.isDragging = true;
+            state.dragOffsetX = 0;
+          }
+          return;
+        }
+        // 场景2：有可控球 → 开始拖拽（点击命中球）
+        if (s) {
+          const p = getCanvasPos(evt);
+          const dx = p.x - s.x;
+          const dy = p.y - s.y;
+          if (dx * dx + dy * dy <= (s.radius + 20) * (s.radius + 20)) {
+            state.isDragging = true;
+            state.dragOffsetX = dx;
+          }
+        }
+      }
+
+      function onPointerMove(evt) {
+        if (!state.isDragging) return;
+        evt.preventDefault();
+        const s = getControllableBall();
+        if (!s) return;
+        const p = getCanvasPos(evt);
+        s.x = p.x - state.dragOffsetX;
+        clampHorizontal(s);
+      }
+
+      function onPointerUp(evt) {
+        if (state.isDragging) {
+          evt.preventDefault();
+          state.isDragging = false;
+        }
+      }
+
+      canvas.addEventListener('mousedown', onPointerDown);
+      window.addEventListener('mousemove', onPointerMove);
+      window.addEventListener('mouseup', onPointerUp);
+      canvas.addEventListener('touchstart', onPointerDown, { passive: false });
+      window.addEventListener('touchmove', onPointerMove, { passive: false });
+      window.addEventListener('touchend', onPointerUp);
+      window.addEventListener('touchcancel', onPointerUp);
+
+      // ========== 渲染与循环 ==========
+      function drawStar(star) {
+        const drawR = star.radius * star.scale;
+        if (drawR < 0.5) return;
+        ctx.save();
+        ctx.translate(star.x, star.y);
+        ctx.rotate(star.angle);
+        // 玻璃外壳（底层，相对圆心 (0,0)）
+        drawGlassShell(0, 0, drawR);
+        // 十字星芒（上层，相对圆心 (0,0)，angle=0 因为外部已整体旋转）
+        drawStarBurst(0, 0, drawR, 0, star.level);
+        ctx.restore();
+      }
+
+      function render() {
+        drawBackground();
+        drawGlassFloor();
+        // 警戒线：红色虚线，静止球顶部超过此线 → 游戏结束
+        ctx.save();
+        ctx.strokeStyle = 'rgba(255, 80, 80, 0.55)';
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([6, 5]);
+        ctx.beginPath();
+        ctx.moveTo(4, WARNING_LINE_Y);
+        ctx.lineTo(LOGICAL_W - 4, WARNING_LINE_Y);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        // 警戒提示文字
+        ctx.fillStyle = 'rgba(255, 120, 120, 0.6)';
+        ctx.font = '10px -apple-system, sans-serif';
+        ctx.textAlign = 'right';
+        ctx.fillText('警戒线 / WARN', LOGICAL_W - 6, WARNING_LINE_Y - 4);
+        ctx.restore();
+        // 统一遍历 balls，按顺序绘制：已固定 → 自动下落/合成产物 → 玩家球 → 等待球
+        // 先画非pending非玩家的球（落地固定、合成自动下落）
+        const hasAutoFalling = (function () {
+          let n = 0;
+          for (let i = 0; i < state.balls.length; i++) {
+            const b = state.balls[i];
+            if (b.isPending) continue;
+            if (b.controllable) continue;
+            n++;
+          }
+          return n > 0;
+        })();
+        const ctrl = getControllableBall();
+        for (let i = 0; i < state.balls.length; i++) {
+          const b = state.balls[i];
+          if (b.isPending) continue;
+          if (b.controllable) continue; // 玩家球最后画
+          drawStar(b);
+        }
+        // 玩家球
+        if (ctrl) drawStar(ctrl);
+        // 等待球：有非pending正在运动（合成自动下落）时半透明，否则完全显示
+        const pending = getPendingBall();
+        if (pending) {
+          // 判定是否有非pending非controllable且正在运动的球（合成产物下落中）
+          let hasMerging = false;
+          for (let i = 0; i < state.balls.length; i++) {
+            const b = state.balls[i];
+            if (b.isPending) continue;
+            if (b.controllable) continue;
+            if (Math.abs(b.vy) > 0.5 || Math.abs(b.vx) > 0.5) { hasMerging = true; break; }
+          }
+          if (hasMerging) ctx.globalAlpha = 0.4;
+          drawStar(pending);
+          ctx.globalAlpha = 1;
+        }
+        // 特效（最上层）
+        drawEffects();
+        // UI 层：分数、游戏结束遮罩
+        ctx.save();
+        // 左上角分数
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.92)';
+        ctx.font = 'bold 20px -apple-system, sans-serif';
+        ctx.textAlign = 'left';
+        ctx.fillText(String(state.score), 10, 26);
+        ctx.font = '10px sans-serif';
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
+        ctx.fillText('SCORE', 10, 40);
+        ctx.restore();
+        // 游戏结束遮罩：分数 + 最高分 + 重新开始按钮
+        if (state.gameOver && !state.showLeaderboard) {
+          ctx.save();
+          ctx.fillStyle = 'rgba(5, 5, 20, 0.82)';
+          ctx.fillRect(0, 0, LOGICAL_W, LOGICAL_H);
+          ctx.textAlign = 'center';
+          // GAME OVER 标题
+          ctx.fillStyle = '#ff4d6d';
+          ctx.font = 'bold 36px -apple-system, sans-serif';
+          ctx.fillText('GAME OVER', LOGICAL_W / 2, LOGICAL_H / 2 - 60);
+          // 当前得分
+          ctx.fillStyle = '#ffffff';
+          ctx.font = 'bold 26px -apple-system, sans-serif';
+          ctx.fillText('得分 ' + state.score, LOGICAL_W / 2, LOGICAL_H / 2 - 16);
+          // 最高分
+          ctx.fillStyle = 'rgba(255, 215, 0, 0.9)';
+          ctx.font = 'bold 16px -apple-system, sans-serif';
+          ctx.fillText('最高分 ' + state.highScore, LOGICAL_W / 2, LOGICAL_H / 2 + 12);
+          // 辅助函数：绘制圆角按钮
+          function drawBtn(btn, bg, text) {
+            const bx = btn.x, by = btn.y, bw = btn.w, bh = btn.h;
+            ctx.fillStyle = bg;
+            ctx.beginPath();
+            const rr = 8;
+            ctx.moveTo(bx + rr, by);
+            ctx.lineTo(bx + bw - rr, by);
+            ctx.quadraticCurveTo(bx + bw, by, bx + bw, by + rr);
+            ctx.lineTo(bx + bw, by + bh - rr);
+            ctx.quadraticCurveTo(bx + bw, by + bh, bx + bw - rr, by + bh);
+            ctx.lineTo(bx + rr, by + bh);
+            ctx.quadraticCurveTo(bx, by + bh, bx, by + bh - rr);
+            ctx.lineTo(bx, by + rr);
+            ctx.quadraticCurveTo(bx, by, bx + rr, by);
+            ctx.closePath();
+            ctx.fill();
+            ctx.fillStyle = '#ffffff';
+            ctx.font = 'bold 18px -apple-system, sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(text, bx + bw / 2, by + bh / 2);
+            ctx.textBaseline = 'alphabetic';
+          }
+          // 重新开始按钮 + 查看排行榜按钮
+          drawBtn(RESTART_BTN, '#ff4d6d', '重新开始');
+          drawBtn(VIEW_LB_BTN, '#5a6fd6', '查看排行榜');
+          ctx.restore();
+        }
+        // 排行榜查看遮罩层（Canvas 绘制，点击任意位置或关闭按钮回到结束遮罩）
+        if (state.showLeaderboard) {
+          ctx.save();
+          ctx.fillStyle = 'rgba(5, 5, 20, 0.9)';
+          ctx.fillRect(0, 0, LOGICAL_W, LOGICAL_H);
+          ctx.textAlign = 'center';
+          ctx.fillStyle = 'rgba(180, 200, 255, 0.98)';
+          ctx.font = 'bold 24px -apple-system, sans-serif';
+          ctx.fillText('排 行 榜', LOGICAL_W / 2, 130);
+          const cx = CLOSE_LB_BTN.x + CLOSE_LB_BTN.w / 2;
+          const cy = CLOSE_LB_BTN.y + CLOSE_LB_BTN.h / 2;
+          const cr = 16;
+          ctx.beginPath();
+          ctx.arc(cx, cy, cr, 0, Math.PI * 2);
+          ctx.fillStyle = 'rgba(80, 100, 160, 0.6)';
+          ctx.fill();
+          ctx.strokeStyle = 'rgba(220, 220, 240, 0.8)';
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.moveTo(cx - 7, cy - 7);
+          ctx.lineTo(cx + 7, cy + 7);
+          ctx.moveTo(cx + 7, cy - 7);
+          ctx.lineTo(cx - 7, cy + 7);
+          ctx.stroke();
+          const lb = state.leaderboard || [];
+          const lbStartY = 170;
+          const lineH = 20;
+          if (lb.length === 0) {
+            ctx.fillStyle = 'rgba(180, 180, 200, 0.7)';
+            ctx.font = '16px -apple-system, sans-serif';
+            ctx.fillText('暂 无 记 录', LOGICAL_W / 2, lbStartY + 20);
+          } else {
+            ctx.fillStyle = 'rgba(140, 160, 200, 0.6)';
+            ctx.font = '12px -apple-system, sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText('排名', 80, lbStartY - 6);
+            ctx.textAlign = 'left';
+            ctx.fillText('昵称', 120, lbStartY - 6);
+            ctx.textAlign = 'right';
+            ctx.fillText('分数', LOGICAL_W - 70, lbStartY - 6);
+            ctx.strokeStyle = 'rgba(100, 120, 180, 0.25)';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(60, lbStartY + 2);
+            ctx.lineTo(LOGICAL_W - 60, lbStartY + 2);
+            ctx.stroke();
+            const displayCount = Math.min(10, lb.length);
+            for (let i = 0; i < displayCount; i++) {
+              const entry = lb[i];
+              const y = lbStartY + 14 + i * lineH;
+              let rankColor = 'rgba(220, 220, 240, 0.85)';
+              if (i === 0) rankColor = 'rgba(255, 215, 0, 0.95)';
+              else if (i === 1) rankColor = 'rgba(200, 200, 220, 0.92)';
+              else if (i === 2) rankColor = 'rgba(205, 127, 50, 0.9)';
+              ctx.fillStyle = rankColor;
+              ctx.font = 'bold 14px -apple-system, sans-serif';
+              ctx.textAlign = 'center';
+              ctx.fillText(String(i + 1), 80, y);
+              ctx.fillStyle = i === 0 ? 'rgba(255, 255, 220, 0.95)' : 'rgba(230, 230, 250, 0.85)';
+              ctx.font = '14px -apple-system, sans-serif';
+              ctx.textAlign = 'left';
+              const rawName = entry.name || '匿名';
+              const dispName = rawName.length > 6 ? rawName.slice(0, 6) + '…' : rawName;
+              ctx.fillText(dispName, 120, y);
+              ctx.fillStyle = i === 0 ? 'rgba(255, 215, 0, 0.95)' : 'rgba(200, 220, 255, 0.88)';
+              ctx.font = 'bold 14px -apple-system, sans-serif';
+              ctx.textAlign = 'right';
+              ctx.fillText(String(entry.score), LOGICAL_W - 70, y);
+            }
+          }
+          ctx.fillStyle = 'rgba(150, 170, 210, 0.5)';
+          ctx.font = '12px -apple-system, sans-serif';
+          ctx.textAlign = 'center';
+          ctx.fillText('点击任意位置关闭', LOGICAL_W / 2, LOGICAL_H - 60);
+          ctx.restore();
+        }
+      }
+
+      // 重新开始按钮区域（逻辑坐标，与 render 中绘制保持一致）
+      const RESTART_BTN = {
+        x: LOGICAL_W / 2 - 80,
+        y: LOGICAL_H / 2 + 50,
+        w: 160,
+        h: 44,
+      };
+      // 查看排行榜按钮区域（在重新开始按钮下方）
+      const VIEW_LB_BTN = {
+        x: LOGICAL_W / 2 - 80,
+        y: LOGICAL_H / 2 + 104,
+        w: 160,
+        h: 44,
+      };
+      // 排行榜遮罩层的关闭按钮（右上角小按钮）
+      const CLOSE_LB_BTN = {
+        x: LOGICAL_W / 2 + 120,
+        y: 100,
+        w: 40,
+        h: 40,
+      };
+
+      function gameLoop() {
+        updatePhysics();
+        render();
+        state.rafId = requestAnimationFrame(gameLoop);
+      }
+
+      // 重置游戏状态并重新启动循环
+      function restartGame() {
+        nicknameOverlay.classList.remove('active');
+        state.balls = [];
+        state.effects = [];
+        state.score = 0;
+        state.gameOver = false;
+        state.showLeaderboard = false;
+        state.scoreSubmitted = false;
+        state.pausedFromGame = false;
+        state.isDragging = false;
+        state.dragOffsetX = 0;
+        state.rafId = null;
+        spawnPendingStar();
+        gameLoop();
+      }
+
+      // 昵称确定按钮处理（DOM 事件）：保存分数，隐藏输入层，重绘结束遮罩
+      function submitNickname() {
+        if (!state.gameOver || state.scoreSubmitted) return;
+        const raw = (nicknameInput.value || '').trim();
+        const name = raw.length === 0 ? '匿名' : (raw.length > 8 ? raw.slice(0, 8) : raw);
+        state.leaderboard = saveLeaderboard(name, state.score);
+        state.scoreSubmitted = true;
+        nicknameOverlay.classList.remove('active');
+        render();
+      }
+      nicknameConfirm.addEventListener('click', submitNickname);
+      nicknameInput.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter' || e.keyCode === 13) submitNickname();
+      });
+
+      // 常驻排行榜按钮：游戏中暂停循环查看排行榜，关闭后恢复
+      lbBtn.addEventListener('click', function (e) {
+        e.stopPropagation();
+        e.preventDefault();
+        if (state.showLeaderboard) return;             // 已打开则忽略
+        if (!state.gameOver && state.rafId !== null) {  // 游戏进行中 → 暂停循环
+          cancelAnimationFrame(state.rafId);
+          state.rafId = null;
+          state.pausedFromGame = true;
+        } else {
+          state.pausedFromGame = false;                 // 游戏结束态，无需暂停
+        }
+        state.showLeaderboard = true;
+        render();                                        // 绘制排行榜遮罩
+      });
+
+      // 重新开始按钮点击检测（仅在游戏结束时响应）
+      function onRestartClick(evt) {
+        if (!state.gameOver && !state.showLeaderboard) return;
+        const p = getCanvasPos(evt);
+        if (state.showLeaderboard) {
+          state.showLeaderboard = false;
+          if (state.pausedFromGame) {
+            state.pausedFromGame = false;
+            gameLoop();
+          } else {
+            render();
+          }
+          return;
+        }
+        if (p.x >= RESTART_BTN.x && p.x <= RESTART_BTN.x + RESTART_BTN.w &&
+            p.y >= RESTART_BTN.y && p.y <= RESTART_BTN.y + RESTART_BTN.h) {
+          restartGame();
+          return;
+        }
+        if (p.x >= VIEW_LB_BTN.x && p.x <= VIEW_LB_BTN.x + VIEW_LB_BTN.w &&
+            p.y >= VIEW_LB_BTN.y && p.y <= VIEW_LB_BTN.y + VIEW_LB_BTN.h) {
+          state.showLeaderboard = true;
+          render();
+          return;
+        }
+      }
+      canvas.addEventListener('click', onRestartClick);
+      canvas.addEventListener('touchend', function (evt) {
+        if (!state.gameOver && !state.showLeaderboard) return;
+        if (!evt.changedTouches || !evt.changedTouches[0]) return;
+        // touchend 没有 touches，用 changedTouches
+        const fakeEvt = { touches: evt.changedTouches, clientX: evt.changedTouches[0].clientX, clientY: evt.changedTouches[0].clientY };
+        const p = getCanvasPos(fakeEvt);
+        if (state.showLeaderboard) {
+          evt.preventDefault();
+          state.showLeaderboard = false;
+          if (state.pausedFromGame) {
+            state.pausedFromGame = false;
+            gameLoop();
+          } else {
+            render();
+          }
+          return;
+        }
+        if (p.x >= RESTART_BTN.x && p.x <= RESTART_BTN.x + RESTART_BTN.w &&
+            p.y >= RESTART_BTN.y && p.y <= RESTART_BTN.y + RESTART_BTN.h) {
+          evt.preventDefault();
+          restartGame();
+          return;
+        }
+        if (p.x >= VIEW_LB_BTN.x && p.x <= VIEW_LB_BTN.x + VIEW_LB_BTN.w &&
+            p.y >= VIEW_LB_BTN.y && p.y <= VIEW_LB_BTN.y + VIEW_LB_BTN.h) {
+          evt.preventDefault();
+          state.showLeaderboard = true;
+          render();
+          return;
+        }
+      }, { passive: false });
+
+      gameLoop();
+    })();
+  </script>
+</body>
+</html>
