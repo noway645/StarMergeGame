@@ -32,12 +32,12 @@
 - 部署：Docker
 
 ## 📁 项目结构
-.
-├── server.js # 后端服务器（静态托管 + 排行榜 API）
-├── package.json # 项目依赖（如 express）
-├── Dockerfile # Docker 镜像构建配置
-├── .gitignore # 忽略 node_modules、data 等
-├── public/
-│ └── index.html # 游戏前端（包含全部 CSS 和 JS）
-└── data/ # 排行榜数据文件（自动创建）
-└── leaderboard.json
+        .
+        ├── server.js # 后端服务器（静态托管 + 排行榜 API）
+        ├── package.json # 项目依赖（如 express）
+        ├── Dockerfile # Docker 镜像构建配置
+        ├── .gitignore # 忽略 node_modules、data 等
+        ├── public/
+        │ └── index.html # 游戏前端（包含全部 CSS 和 JS）
+        └── data/ # 排行榜数据文件（自动创建）
+        └── leaderboard.json
