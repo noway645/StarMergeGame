@@ -2,7 +2,8 @@
 
 一个在弧形玻璃瓶底中滚动、碰撞、合成的物理小游戏。灵感来自淘宝星星合成与小红书星光夜市，拥有真实的球体滚动惯性、玻璃球质感、十字星芒和局域网共享排行榜。
 
-![游戏截图占位]![[Uploading image.png…]()](https://github.com/noway645/StarMergeGame/blob/main/pictures/gameui.PNG)
+                                                                ![游戏截图占位]!
+[[Uploading image.png…]()](https://github.com/noway645/StarMergeGame/blob/main/pictures/gameui.PNG)
 
 ## ✨ 功能特性
 
